@@ -14,21 +14,50 @@
 <body>
     <div class="container">
         <div class="row">
-            <h1>WebRTC Chat</h1>
-            <div class="col-4">
-                local
-                <video class="img-fluid" id="localVideo" autoplay muted playsinline></video>
-            </div>
-            <div class="col-4">
-                remote
-                <video class="img-fluid" id="remoteVideo" autoplay playsinline></video>
+            <h1 class="display-1">WebRTC Template</h1>
+            <div class="col-12 mb-3">
+                <div class="card">
+                    <div class="card-header">
+                        Camera
+                    </div>
+                    <div class="card-body">
+                        <div class="position-relative">
+                            <video class="img-fluid" style="width:100%" id="remoteVideo" autoplay playsinline
+                                controls></video>
+                            <span class="position-absolute top-0 start-0">
+                                <video class="" style="width:25%" id="localVideo" autoplay muted playsinline></video>
+                            </span>
+                            <span class="badge rounded-pill bg-success position-absolute top-0 end-0 small mt-2 me-2"
+                                id="remove_video_information">
+
+                            </span>
+                        </div>
+                        <div class="input-group">
+                            <label class="input-group-text">
+                                Camera Device(s)
+                            </label>
+                            <select id="videoInput" class="form-select">
+                            </select>
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <div class="col-4">
-                <div id="chat">
-                    <div id="messages"></div>
-                    <input type="text" id="messageInput" placeholder="Type a message..." />
-                    <button id="sendButton">Send</button>
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        Chat
+                    </div>
+                    <div class="card-body">
+                        <div id="chat">
+                            <div id="messages"></div>
+                            <div class="input-group mb-3">
+                                <input class="form-control" type="text" id="messageInput"
+                                    placeholder="Type a message..." />
+                                <button class="btn btn-primary" id="sendButton">Send</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -58,7 +87,13 @@
 
         async function init() {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                    },
+                    audio: true
+                });
                 localVideo.srcObject = localStream;
                 socket.emit('ready');
             } catch (error) {
@@ -100,19 +135,25 @@
             console.log('Creating peer connection');
             peerConnection = new RTCPeerConnection(configuration);
 
-            dataChannel = peerConnection.createDataChannel("chat");
+            dataChannel = peerConnection.createDataChannel("data");
             dataChannel.onmessage = (event) => {
-                const message = document.createElement('div');
-                message.textContent = `Remote: ${event.data}`;
-                messages.appendChild(message);
+                const data = JSON.parse(event.data);
+                if (data.type === 'chat') {
+                    const message = document.createElement('div');
+                    message.textContent = `Remote: ${data.text}`;
+                    messages.appendChild(message);
+                }
             };
 
             peerConnection.ondatachannel = (event) => {
                 dataChannel = event.channel;
                 dataChannel.onmessage = (event) => {
-                    const message = document.createElement('div');
-                    message.textContent = `Remote: ${event.data}`;
-                    messages.appendChild(message);
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'chat') {
+                        const message = document.createElement('div');
+                        message.textContent = `Remote: ${data.text}`;
+                        messages.appendChild(message);
+                    }
                 };
             };
 
@@ -129,6 +170,11 @@
                     remoteStream.addTrack(track);
                 });
                 remoteVideo.srcObject = remoteStream;
+                // 1秒おきにremoveVideoの解像度等の情報を表示
+                setInterval(() => {
+                    // console.log(remoteVideo, remoteVideo.videoWidth, remoteVideo.videoHeight, remoteVideo.currentTime);
+                    document.querySelector('#remove_video_information').textContent = `${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`;
+                }, 1000);
             };
 
             localStream.getTracks().forEach(track => {
@@ -138,15 +184,64 @@
         }
 
         sendButton.onclick = () => {
-            const message = messageInput.value;
-            dataChannel.send(message);
+            const message = {
+                type: 'chat',
+                text: messageInput.value
+            };
+            dataChannel.send(JSON.stringify(message));
+
             const messageElement = document.createElement('div');
-            messageElement.textContent = `You: ${message}`;
+            messageElement.textContent = `You: ${message.text}`;
             messages.appendChild(messageElement);
             messageInput.value = '';
         };
 
         init();
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoInput = document.getElementById('videoInput');
+            devices.forEach(device => {
+                if (device.kind === 'videoinput') {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${videoInput.length + 1}`;
+                    videoInput.appendChild(option);
+                }
+            });
+
+            videoInput.onchange = async () => {
+                // 既存のトラックを停止
+                localStream.getTracks().forEach(track => {
+                    track.stop();
+                });
+
+                // 新しいストリームを取得
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        deviceId: { exact: videoInput.value },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                    },
+                    audio: true
+                });
+
+                // ビデオ要素に新しいストリームを設定
+                localVideo.srcObject = localStream;
+
+                // 既存のビデオトラックを更新
+                const videoSender = peerConnection.getSenders().find(sender => sender.track.kind === 'video');
+                if (videoSender) {
+                    videoSender.replaceTrack(localStream.getVideoTracks()[0]);
+                }
+
+                // オーディオトラックを更新
+                const audioSender = peerConnection.getSenders().find(sender => sender.track.kind === 'audio');
+                if (audioSender) {
+                    audioSender.replaceTrack(localStream.getAudioTracks()[0]);
+                }
+            };
+        });
     </script>
 
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js"
